@@ -109,9 +109,8 @@ public class AppComponent {
             // Learn the bridge table
             DeviceId deviceId = pkt.receivedFrom().deviceId();
             MacAddress srcMac = ethPkt.getSourceMAC();
+            MacAddress dstMac = ethPkt.getDestinationMAC();
             PortNumber inPort = pkt.receivedFrom().port();
-            bridgeTable.putIfAbsent(deviceId, new HashMap<>());
-            bridgeTable.get(deviceId).put(srcMac, inPort);
 
             if (ethPkt.getEtherType() == Ethernet.TYPE_ARP) {
                 ARP arp = (ARP) ethPkt.getPayload();
@@ -128,33 +127,45 @@ public class AppComponent {
                 // Learn the ARP table
                 arpTable.put(senderIp, srcMac);
 
-                // Check if the target IP is in the ARP table
-                if (arpTable.containsKey(targetIp)) {
-                    MacAddress targetMac = arpTable.get(targetIp);
-                    Ethernet ethReply = ARP.buildArpReply(targetIp, targetMac, ethPkt);
-                    TrafficTreatment treatment = DefaultTrafficTreatment.builder().setOutput(inPort).build();
-                    context.block();
-                    packetService.emit(
-                            new DefaultOutboundPacket(deviceId, treatment, ByteBuffer.wrap(ethReply.serialize())));
-                    log.info("TABLE HIT. Requested MAC = {}", targetMac);
-                } else {
-                    flood(context);
-                    log.info("TABLE MISS. Send request to edge ports");
+                if (arp.getOpCode() == ARP.OP_REQUEST) {
+                    // Check if the target IP is in the ARP table
+                    if (arpTable.containsKey(targetIp)) {
+                        MacAddress targetMac = arpTable.get(targetIp);
+                        Ethernet ethReply = ARP.buildArpReply(targetIp, targetMac, ethPkt);
+                        TrafficTreatment treatment = DefaultTrafficTreatment.builder().setOutput(inPort).build();
+                        context.block();
+                        packetService.emit(
+                                new DefaultOutboundPacket(deviceId, treatment,
+                                        ByteBuffer.wrap(ethReply.serialize())));
+                        log.info("TABLE HIT. Requested MAC = {}", targetMac);
+
+                    } else {
+                        flood(context);
+                        log.info("TABLE MISS. Send request to edge ports");
+
+                        // Learn the bridge table only for reply arp
+                        bridgeTable.put(deviceId, new HashMap<>());
+                        bridgeTable.get(deviceId).put(srcMac, inPort);
+                    }
+                } else if (arp.getOpCode() == ARP.OP_REPLY) {
+                    if (bridgeTable.containsKey(deviceId) && bridgeTable.get(deviceId).containsKey(dstMac)) {
+                        PortNumber outPort = bridgeTable.get(deviceId).get(dstMac);
+                        context.treatmentBuilder().setOutput(outPort);
+                        context.send();
+                        log.info("RECV REPLY. Requested MAC = {}", srcMac);
+
+                        // Remove port from bridge table to prevent extra reply arp
+                        bridgeTable.get(deviceId).remove(dstMac);
+                    }
                 }
 
-                if (arp.getOpCode() == ARP.OP_REPLY) {
-                    log.info("RECV REPLY. Requested MAC = {}", srcMac);
-                }
             }
 
         }
 
         private void flood(PacketContext context) {
-            Ethernet ethPkt = context.inPacket().parsed();
-            DeviceId deviceId = context.inPacket().receivedFrom().deviceId();
-            TrafficTreatment treatment = DefaultTrafficTreatment.builder().setOutput(PortNumber.FLOOD).build();
-            packetService
-                    .emit(new DefaultOutboundPacket(deviceId, treatment, ByteBuffer.wrap(ethPkt.serialize())));
+            context.treatmentBuilder().setOutput(PortNumber.FLOOD);
+            context.send();
         }
     }
 
