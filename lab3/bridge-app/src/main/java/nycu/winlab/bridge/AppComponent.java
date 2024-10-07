@@ -34,6 +34,9 @@ import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.FlowRule;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
+// import org.onosproject.net.flowobjective.DefaultForwardingObjective;
+// import org.onosproject.net.flowobjective.FlowObjectiveService;
+// import org.onosproject.net.flowobjective.ForwardingObjective;
 import org.onosproject.net.packet.PacketPriority;
 import org.onosproject.net.packet.PacketService;
 import org.onosproject.net.packet.PacketProcessor;
@@ -67,6 +70,9 @@ public class AppComponent {
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected FlowRuleService flowRuleService;
+
+    // @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    // protected FlowObjectiveService flowObjectiveService;
 
     private LearningBridgeProcessor processor = new LearningBridgeProcessor();
     private ApplicationId appId;
@@ -173,6 +179,7 @@ public class AppComponent {
     }
 
     // TODO4: Install a rule forwarding the packet to the specified port
+    // (Use flow package)
     private void installRule(PacketContext context, PortNumber port) {
         Ethernet inPkt = context.inPacket().parsed();
         TrafficSelector.Builder selectorBuilder = DefaultTrafficSelector.builder();
@@ -185,8 +192,9 @@ public class AppComponent {
                 .withSelector(selectorBuilder.build()) // Traffic selector
                 .withTreatment(treatment) // Action to perform
                 .withPriority(30) // Set a priority for the rule
-                .withIdleTimeout(30) // Timeout for the rule
-                .forDevice(context.inPacket().receivedFrom().deviceId()) // Device where the rule applies
+                .makeTemporary(30) // Timeout for the rule
+                .forDevice(context.inPacket().receivedFrom().deviceId()) // Device where the
+                // rule applies
                 .fromApp(appId) // Application ID
                 .build();
 
@@ -195,4 +203,29 @@ public class AppComponent {
         context.send();
     }
 
+    // (Use flowobjective package)
+    // private void installRule(PacketContext context, PortNumber port) {
+    // Ethernet inPkt = context.inPacket().parsed();
+    // TrafficSelector.Builder selectorBuilder = DefaultTrafficSelector.builder();
+
+    // selectorBuilder.matchEthDst(inPkt.getDestinationMAC()).matchEthSrc(inPkt.getSourceMAC());
+
+    // TrafficTreatment treatment =
+    // context.treatmentBuilder().setOutput(port).build();
+
+    // ForwardingObjective forwardingObjective =
+    // DefaultForwardingObjective.builder()
+    // .withSelector(selectorBuilder.build()) // Traffic selector
+    // .withTreatment(treatment) // Action to perform
+    // .withPriority(30) // Set a priority for the rule
+    // .makeTemporary(30) // Timeout for the rule
+    // .withFlag(ForwardingObjective.Flag.VERSATILE) // Flag for the rule
+    // .fromApp(appId) // Application ID
+    // .add();
+
+    // flowObjectiveService.forward(context.inPacket().receivedFrom().deviceId(),
+    // forwardingObjective);
+
+    // context.send();
+    // }
 }
