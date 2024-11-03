@@ -24,9 +24,9 @@ In Workflow1, I set up a ring topology with 5 switches and 5 hosts. I configured
     --switch=ovs,protocols=OpenFlow14
     ```
 
-    |   Figure1: Topology   |
-    |:---------------------:|
-    | ![topo](img/topo.png) |
+    |                Figure1: Topology                 |
+    |:------------------------------------------------:|
+    | <img src="img/topo.png" alt="topo" width="500"/> |
 
 2. **Upload config file to ONOS**
     
@@ -81,6 +81,8 @@ In Workflow1, I set up a ring topology with 5 switches and 5 hosts. I configured
         |:-------------------------------------:|
         | ![ovs-ofctl-s5](img/ovs-ofctl-s5.png) |
 
+<div style="break-after:page"></div>
+
 ### Workflow2 - s1-s3 link down
 ![workflow2](img/workflow2.png)
 
@@ -93,24 +95,25 @@ Workflow2 is similar to Workflow1, but with the s1-s2 link down. Thus, s1 will d
     ```shell
     mininet> link s1 s2 down
     ```
-    |    Figure9: Topology    |
-    |:-----------------------:|
-    | ![topo2](img/topo2.png) |
+    |                 Figure9: Topology                  |
+    |:--------------------------------------------------:|
+    | <img src="img/topo2.png" alt="topo2" width="400"/> |
+
 
 7. **Run iperf UDP on h1 to h2**
 
     I tested the traffic by running iperf UDP on h1 to h2. The result is shown in Figure10. The yellow box in Figure10 shows the intent information log indicating that our app has installed the intent right after udp packet-in.
 
-    | Figure10: Run iperf UDP on h1 to h2 |
-    |:-----------------------------------:|
-    |      ![iperf2](img/iperf2.png)      |
+    |         Figure10: Run iperf UDP on h1 to h2          |
+    |:----------------------------------------------------:|
+    | <img src="img/iperf2.png" alt="iperf2" width="400"/> |
 
 8. **Monitor s1 and s4 interface**
     - **Check if both traffic go through s4**
 
         Figures 11 and 12 display the port dumps for s1 and s4. Originally, as see in Figure 5, port "s1-eth3" was handling around 100 packets, but after the s1-s2 link goes down, this number increases to 3,000 packets. This indicates that the traffic from h1 to h2 is now being rerouted through s4.
 
-        | Figure11: s1 dump-ports (s1-s2 link down) | Figure12: s4 dump-ports (s1-s2 link down) |
+        |    Figure11: s1 dump-ports (link down)    |    Figure12: s4 dump-ports (link down)    |
         |:-----------------------------------------:|:-----------------------------------------:|
         | ![ovs-ofctl-s1-2](img/ovs-ofctl-s1-2.png) | ![ovs-ofctl-s4-2](img/ovs-ofctl-s4-2.png) |
     
@@ -118,6 +121,6 @@ Workflow2 is similar to Workflow1, but with the s1-s2 link down. Thus, s1 will d
 
         To verify that the traffic rate is limited by the meter on s4, I ran an iperf UDP test from h1 to h2 while monitoring the port dumps on s4. Figure 14 shows that when traffic flows through s4, the meter enforces a 1 Mbps cap, resulting in reduced throughput and potential packet drops once the rate exceeds the limit. The meter on s4 monitors traffic and allows bursts up to 1024 KB, but once the burst buffer is exceeded and traffic surpasses 512 KB/sec, the meter begins dropping excess packets. In contrast, Figure 13 shows traffic passing through s2 without any rate limit, allowing higher sustained bandwidth and no packet loss.
 
-        | Figure13: traffic go througn s2 (unlimited) | Figure14: traffic go through s4 (limited) |
-        |:-------------------------------------------:|:-----------------------------------------:|
-        | ![traffic unlimit](img/traffic-unlimit.png) |  ![traffic limit](img/traffic-limit.png)  |
+        |      Figure13: h2 jobs (no rate limit)      |     Figure14: h2 jobs (rate limit)      |
+        |:-------------------------------------------:|:---------------------------------------:|
+        | ![traffic unlimit](img/traffic-unlimit.png) | ![traffic limit](img/traffic-limit.png) |
