@@ -37,7 +37,7 @@
 
 ---
 
-## [Lab3: ONOS Application Development: SDN-enabled Learning Bridge and Proxy ARP](lab3/2024_SDNFV_LAB3.pdf)
+## [Lab3: ONOS APP: SDN-enabled Learning Bridge and Proxy ARP](lab3/2024_SDNFV_LAB3.pdf)
 
 **Report**
 - [report](lab3/README.md)
