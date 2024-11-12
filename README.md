@@ -1,7 +1,7 @@
 # Software Defined Networks and Network Function Virtualization
 
-> NYCU 2024 Fall SDN Lab
-> [113 Autumn] 535606 Software Defined Networks and Network Function Virtualization
+> NYCU 2024 Fall SDN Lab  
+> [113 Autumn] 535606 Software Defined Networks and Network Function Virtualization  
 > Instructor: 曾建超
 
 <!-- - [Lab1: ONOS and Mininet Installation](lab1/README.md)
