@@ -180,7 +180,6 @@ public class AppComponent {
             }
 
             DeviceId deviceId = pkt.receivedFrom().deviceId();
-            MacAddress srcMac = ethPkt.getSourceMAC();
             PortNumber inPort = pkt.receivedFrom().port();
 
             // Repky the first arp packet
@@ -213,13 +212,14 @@ public class AppComponent {
                 }
 
             } else {
+                MacAddress dstMac = ethPkt.getDestinationMAC();
                 // Flow Ruls Installation with IntentService
-                if (srcMac.equals(MacAddress.valueOf(config.getMac1()))) {
-                    // Define ingress and egress ConnectPoint for s2/s5 to h2
+                if (dstMac.equals(MacAddress.valueOf(config.getMac1()))) {
+                    // Define ingress and egress ConnectPoint for h2 to h1
                     ConnectPoint ingressPoint = pkt.receivedFrom();
-                    ConnectPoint egressPoint = ConnectPoint.deviceConnectPoint(config.getHost2());
+                    ConnectPoint egressPoint = ConnectPoint.deviceConnectPoint(config.getHost1());
                     TrafficSelector trafficSelector = DefaultTrafficSelector.builder()
-                            .matchEthDst(MacAddress.valueOf(config.getMac2()))
+                            .matchEthDst(MacAddress.valueOf(config.getMac1()))
                             .build();
                     PointToPointIntent intent = PointToPointIntent.builder()
                             .appId(appId)
@@ -232,12 +232,12 @@ public class AppComponent {
                     log.info(
                             "Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
                             ingressPoint.deviceId(), ingressPoint.port(), egressPoint.deviceId(), egressPoint.port());
-                } else if (srcMac.equals(MacAddress.valueOf(config.getMac2()))) {
-                    // Define ingress and egress ConnectPoint for h2 to h1
+                } else if (dstMac.equals(MacAddress.valueOf(config.getMac2()))) {
+                    // Define ingress and egress ConnectPoint for s2/s5 to h2
                     ConnectPoint ingressPoint = pkt.receivedFrom();
-                    ConnectPoint egressPoint = ConnectPoint.deviceConnectPoint(config.getHost1());
+                    ConnectPoint egressPoint = ConnectPoint.deviceConnectPoint(config.getHost2());
                     TrafficSelector trafficSelector = DefaultTrafficSelector.builder()
-                            .matchEthDst(MacAddress.valueOf(config.getMac1()))
+                            .matchEthDst(MacAddress.valueOf(config.getMac2()))
                             .build();
                     PointToPointIntent intent = PointToPointIntent.builder()
                             .appId(appId)

@@ -83,7 +83,7 @@ In Workflow1, I set up a ring topology with 5 switches and 5 hosts. I configured
 
 <div style="break-after:page"></div>
 
-### Workflow2 - s1-s3 link down
+### Workflow2 - s1-s2 link down
 ![workflow2](img/workflow2.png)
 
 Workflow2 is similar to Workflow1, but with the s1-s2 link down. Thus, s1 will direct traffic from h1 to h2 to flow through s4. Also, the traffic rate will be limited by the meter rule on s4. The following steps detail the process and results of Workflow2.
