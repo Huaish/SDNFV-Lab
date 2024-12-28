@@ -1,0 +1,109 @@
+services:
+  onos:
+    image: onosproject/onos:2.7-latest
+    container_name: onos
+    hostname: onos
+    privileged: true
+    networks:
+      - default
+    environment:
+      - ONOS_APPS=drivers,fpm,openflow,gui2
+    ports:
+      - "2620:2620"
+      - "6653:6653"
+      - "8101:8101"
+      - "8181:8181"
+    tty: true
+    stdin_open: true
+  
+  h1:
+    image: host
+    container_name: h1
+    privileged: true
+    build:
+      context: .
+      dockerfile: containers/host/Dockerfile
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+    entrypoint: ["/bin/sh","-c"]
+    command:
+    - |
+      sleep infinity
+
+  h2:
+    image: host
+    container_name: h2
+    privileged: true
+    build:
+      context: .
+      dockerfile: containers/host/Dockerfile
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+    networks:
+      R2h2br:
+        ipv4_address: 172.17.55.2
+        ipv6_address: "2a0b:4e07:c4:155::2"
+    entrypoint: ["/bin/sh","-c"]
+    command:
+    - |
+      ip route del default 
+      ip route add default via 172.17.55.1
+      ip -6 route add default via 2a0b:4e07:c4:155::1
+      sleep infinity
+
+  r1:
+    container_name: R1
+    hostname: R1
+    privileged: true
+    build:
+      context: .
+      dockerfile: containers/frr/Dockerfile
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config/daemons:/etc/frr/daemons
+      - ./config/R1/frr.conf:/etc/frr/frr.conf
+
+  r2:
+    container_name: R2
+    hostname: R2
+    privileged: true
+    build:
+      context: .
+      dockerfile: containers/frr/Dockerfile
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+    networks:
+      R2h2br:
+        ipv4_address: 172.17.55.1
+        ipv6_address: "2a0b:4e07:c4:155::1"
+    volumes:
+      - ./config/daemons:/etc/frr/daemons
+      - ./config/R2/frr.conf:/etc/frr/frr.conf
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.10.0.0/16
+  R2h2br:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.17.55.0/24
+          gateway: 172.17.55.3
+        - subnet: 2a0b:4e07:c4:155::/64
+          gateway: 2a0b:4e07:c4:155::3
