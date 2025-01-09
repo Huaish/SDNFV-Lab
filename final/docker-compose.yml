@@ -29,6 +29,8 @@ services:
     entrypoint: ["/bin/sh","-c"]
     command:
     - |
+      ip route del default 
+      ip -6 route del default
       sleep infinity
 
   h2:
@@ -49,6 +51,7 @@ services:
     command:
     - |
       ip route del default 
+      ip -6 route del default
       ip route add default via 172.17.55.1
       ip -6 route add default via 2a0b:4e07:c4:155::1
       sleep infinity
@@ -88,7 +91,7 @@ services:
     networks:
       R2h2br:
         ipv4_address: 172.17.55.1
-        ipv6_address: "2a0b:4e07:c4:155::1"
+        ipv6_address: 2a0b:4e07:c4:155::1
     volumes:
       - ./config/daemons:/etc/frr/daemons
       - ./config/R2/frr.conf:/etc/frr/frr.conf

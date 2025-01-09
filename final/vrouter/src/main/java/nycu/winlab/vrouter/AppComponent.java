@@ -19,7 +19,11 @@ import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_ADDED;
 import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_UPDATED;
 import static org.onosproject.net.config.basics.SubjectFactories.APP_SUBJECT_FACTORY;
 
+import org.onlab.packet.ARP;
 import org.onlab.packet.Ethernet;
+import org.onlab.packet.ICMP6;
+import org.onlab.packet.IPv4;
+import org.onlab.packet.IPv6;
 import org.onlab.packet.Ip4Address;
 import org.onlab.packet.Ip4Prefix;
 import org.onlab.packet.Ip6Address;
@@ -27,37 +31,40 @@ import org.onlab.packet.Ip6Prefix;
 import org.onlab.packet.IpAddress;
 import org.onlab.packet.IpPrefix;
 import org.onlab.packet.MacAddress;
-import org.onosproject.cfg.ComponentConfigService;
+import org.onlab.packet.ndp.NeighborDiscoveryOptions;
+import org.onlab.packet.ndp.NeighborSolicitation;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
-import org.onosproject.core.GroupId;
 import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.DeviceId;
 import org.onosproject.net.FilteredConnectPoint;
+import org.onosproject.net.Host;
 import org.onosproject.net.PortNumber;
 import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.config.NetworkConfigRegistry;
 import org.onosproject.net.edge.EdgePortService;
-import org.onosproject.net.flow.DefaultFlowRule;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
-import org.onosproject.net.flow.FlowRule;
 import org.onosproject.net.flow.FlowRuleService;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
+import org.onosproject.net.host.HostService;
 import org.onosproject.net.host.InterfaceIpAddress;
 import org.onosproject.net.intent.Intent;
+import org.onosproject.net.intent.Key;
 import org.onosproject.net.intent.IntentService;
 import org.onosproject.net.intent.MultiPointToSinglePointIntent;
+import org.onosproject.routeservice.ResolvedRoute;
 import org.onosproject.routeservice.RouteEvent;
+import org.onosproject.routeservice.RouteInfo;
 import org.onosproject.routeservice.RouteListener;
 import org.onosproject.routeservice.RouteService;
+import org.onosproject.routeservice.RouteTableId;
 import org.onosproject.net.intent.PointToPointIntent;
 import org.onosproject.net.intf.Interface;
 import org.onosproject.net.intf.InterfaceService;
-import org.onosproject.net.meter.MeterId;
 import org.onosproject.net.packet.DefaultOutboundPacket;
 import org.onosproject.net.packet.InboundPacket;
 import org.onosproject.net.packet.OutboundPacket;
@@ -65,27 +72,24 @@ import org.onosproject.net.packet.PacketContext;
 import org.onosproject.net.packet.PacketPriority;
 import org.onosproject.net.packet.PacketProcessor;
 import org.onosproject.net.packet.PacketService;
-import org.osgi.service.component.ComponentContext;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Deactivate;
-import org.osgi.service.component.annotations.Modified;
 import org.osgi.service.component.annotations.Reference;
 import org.osgi.service.component.annotations.ReferenceCardinality;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.collect.Lists;
+
 import java.nio.ByteBuffer;
-import java.util.Dictionary;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
+import java.util.Optional;
 import java.util.Set;
-
-import javax.sound.sampled.Port;
-
-import static org.onlab.util.Tools.get;
 
 /**
  * Skeletal ONOS application component.
@@ -93,7 +97,7 @@ import static org.onlab.util.Tools.get;
 @Component(immediate = true)
 public class AppComponent {
 
-    private final Logger log = LoggerFactory.getLogger(getClass());
+    private final Logger log = LoggerFactory.getLogger("vrouter");
     private final VConfigListener cfgListener = new VConfigListener();
 
     private final ConfigFactory<ApplicationId, VConfig> factory = new ConfigFactory<ApplicationId, VConfig>(
@@ -128,10 +132,13 @@ public class AppComponent {
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected FlowRuleService flowRuleService;
 
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected HostService hostService;
+
     private ApplicationId appId;
     VConfig config = null;
 
-    private IntraDomainProcessor intraDomainProcessor = new IntraDomainProcessor();
+    private IntraInterProcessor intraInterProcessor = new IntraInterProcessor();
     private Map<DeviceId, Map<MacAddress, PortNumber>> bridgeTable = new HashMap<>();
     private TransitProcessor transitProcessor = new TransitProcessor();
 
@@ -157,7 +164,7 @@ public class AppComponent {
         cfgService.registerConfigFactory(factory);
 
         // Register the intra-domain processor
-        packetService.addProcessor(intraDomainProcessor, PacketProcessor.director(2));
+        packetService.addProcessor(intraInterProcessor, PacketProcessor.director(2));
         TrafficSelector selectorIpv4 = DefaultTrafficSelector.builder()
                 .matchEthType(Ethernet.TYPE_IPV4).build();
         packetService.requestPackets(selectorIpv4, PacketPriority.REACTIVE, appId);
@@ -177,8 +184,8 @@ public class AppComponent {
         cfgService.unregisterConfigFactory(factory);
 
         // Unregister the intra-domain processor
-        packetService.removeProcessor(intraDomainProcessor);
-        intraDomainProcessor = null;
+        packetService.removeProcessor(intraInterProcessor);
+        intraInterProcessor = null;
         TrafficSelector selectorIpv4 = DefaultTrafficSelector.builder()
                 .matchEthType(Ethernet.TYPE_IPV4).build();
         packetService.cancelPackets(selectorIpv4, PacketPriority.REACTIVE, appId);
@@ -201,13 +208,6 @@ public class AppComponent {
 
                 if (newconfig != null) {
                     config = newconfig;
-                    // config != null, remove all flows installed by this application
-                    // if (config != null) {
-                    // TODO: remove all flows installed by this application
-                    // for (Intent intent : intentService.getIntentsByAppId(appId)) {
-                    // intentService.withdraw(intent);
-                    // }
-                    // }
 
                     frrMac = MacAddress.valueOf(config.frrMac());
                     frrCp = ConnectPoint.fromString(config.frrCp());
@@ -220,16 +220,26 @@ public class AppComponent {
                     taGatewayIp6 = Ip6Address.valueOf(config.taGatewayIp6());
                     taDomainIp4 = Ip4Prefix.valueOf(config.taDomainIp4());
                     taDomainIp6 = Ip6Prefix.valueOf(config.taDomainIp6());
-                    log.info("frr mac = {}", frrMac);
-                    log.info("frr connect point = {}", frrCp);
+                    log.info("R1 mac = {}", frrMac);
+                    log.info("R1 connect point = {}", frrCp);
                     log.info("gateway ipv4 = {}, ipv6 = {}", gatewayIp4, gatewayIp6);
                     log.info("gateway mac = {}", gatewayMac);
 
+                    for (String peer : v4Peers) {
+                        log.info("v4Peer = {}", peer);
+                        String[] ips = peer.split(", ");
+                        floodArp(Ip4Address.valueOf(ips[1]));
+                    }
+                    for (String peer : v6Peers) {
+                        log.info("v6Peer = {}", peer);
+                        String[] ips = peer.split(", ");
+                        floodNdp(Ip6Address.valueOf(ips[1]));
+                    }
+
+                    withdrawPointToPointIntent();
                     BGPConnection();
 
                 }
-            } else {
-                log.info("event type = {}", event.type());
             }
         }
 
@@ -251,8 +261,8 @@ public class AppComponent {
                         .matchIPDst(IpPrefix.valueOf(ip1, 32))
                         .build();
 
-                installIntent(frrCp, intf.connectPoint(), selector1, null, 30);
-                installIntent(intf.connectPoint(), frrCp, selector2, null, 30);
+                installIntent(frrCp, intf.connectPoint(), selector1, null, 100);
+                installIntent(intf.connectPoint(), frrCp, selector2, null, 100);
 
             }
 
@@ -272,19 +282,17 @@ public class AppComponent {
                         .matchIPv6Dst(Ip6Prefix.valueOf(ip1, 128))
                         .build();
 
-                installIntent(frrCp, intf.connectPoint(), selector1, null, 30);
-                installIntent(intf.connectPoint(), frrCp, selector2, null, 30);
+                installIntent(frrCp, intf.connectPoint(), selector1, null, 100);
+                installIntent(intf.connectPoint(), frrCp, selector2, null, 100);
             }
         }
     }
 
-    // ===== Implement Intra-Domain Processor using learning bridge =====
-    private class IntraDomainProcessor implements PacketProcessor {
+    // ===== Implement Intra-Domain and Inter-Domain Processor =====
+    private class IntraInterProcessor implements PacketProcessor {
 
         @Override
         public void process(PacketContext context) {
-            // Stop processing if the packet has been handled, since we
-            // can't do any more to it.
             if (context.isHandled()) {
                 return;
             }
@@ -295,85 +303,23 @@ public class AppComponent {
                 return;
             }
 
-            DeviceId recDevId = pkt.receivedFrom().deviceId();
-            PortNumber inPort = pkt.receivedFrom().port();
-            MacAddress srcMac = ethPkt.getSourceMAC();
-            MacAddress dstMac = ethPkt.getDestinationMAC();
+            boolean externalIn = processExternalIn(context);
+            boolean externalOut = processExternalOut(context);
 
-            // if type ipv4
-            if (ethPkt.getEtherType() == Ethernet.TYPE_IPV4) {
-                Ip4Address dstIp = Ip4Address
-                        .valueOf(((org.onlab.packet.IPv4) ethPkt.getPayload()).getDestinationAddress());
-                // i.e. 192.168.70.253, 192.168.63.2
-                for (String peer : v4Peers) {
-                    String[] ips = peer.split(", ");
-                    Ip4Address ip2 = Ip4Address.valueOf(ips[1]);
-                    if (dstIp.equals(ip2)) {
-                        return;
-                    }
-                }
-            } else if (ethPkt.getEtherType() == Ethernet.TYPE_IPV6) {
-                Ip6Address dstIp = Ip6Address
-                        .valueOf(((org.onlab.packet.IPv6) ethPkt.getPayload()).getDestinationAddress());
-                for (String peer : v6Peers) {
-                    String[] ips = peer.split(", ");
-                    Ip6Address ip2 = Ip6Address.valueOf(ips[1]);
-                    if (dstIp.equals(ip2)) {
-                        return;
-                    }
-                }
+            if (externalIn || externalOut) {
+                return;
             }
 
-            // rec packet-in from new device, create new table for it
-            if (bridgeTable.get(recDevId) == null) {
-                bridgeTable.put(recDevId, new HashMap<>());
-            }
-
-            if (bridgeTable.get(recDevId).get(srcMac) == null) {
-                bridgeTable.get(recDevId).put(srcMac, inPort);
-                log.info("Add an entry to the port table of `{}`. MAC address: `{}` => Port: `{}`",
-                        recDevId, srcMac, inPort);
-
-            }
-
-            if (bridgeTable.get(recDevId).get(dstMac) == null) {
-                // FLOOD
-                flood(context);
-                log.info("MAC address `{}` is missed on `{}`. Flood the packet.", dstMac, recDevId);
-
-            } else if (bridgeTable.get(recDevId).get(dstMac) != null) {
-                // there is a entry store the mapping of dst mac and forwarding port
-                // installFlowRule(context, bridgeTable.get(recDevId).get(dstMac));
-                ConnectPoint ingressPoint = new ConnectPoint(recDevId, inPort);
-                ConnectPoint egressPoint = new ConnectPoint(recDevId, bridgeTable.get(recDevId).get(dstMac));
-                TrafficSelector selector = DefaultTrafficSelector.builder()
-                        .matchEthDst(dstMac).matchEthSrc(srcMac).build();
-                Interface intf = interfaceService.getInterfacesByPort(egressPoint).stream().findFirst().orElse(null);
-                if (intf == null) {
-                    installIntent(ingressPoint, egressPoint, selector, null, 20);
-                    log.info("MAC address `{}` is matched on `{}`. Install a flow rule.", dstMac, recDevId);
-                }
-            }
+            processIntraDomain(context);
         }
 
         private void flood(PacketContext context) {
+
             for (ConnectPoint cp : edgePortService.getEdgePoints()) {
                 if (cp.equals(context.inPacket().receivedFrom())) {
                     continue;
                 }
-
-                boolean isInterface = false;
-                Set<Interface> intfsets = interfaceService.getInterfaces();
-                for (Interface intf : intfsets) {
-                    if (intf.connectPoint().equals(cp)) {
-                        isInterface = true;
-                        break;
-                    }
-                }
-                if (!isInterface) {
-                    packetOut(context.inPacket().parsed(), cp);
-                    log.info("Flood packet to {}", cp);
-                }
+                packetOut(context.inPacket().parsed(), cp);
 
             }
         }
@@ -386,6 +332,178 @@ public class AppComponent {
                     cp.deviceId(), treatment, ByteBuffer.wrap(ethPkt.serialize()));
             packetService.emit(outPacket);
         }
+
+        private boolean processExternalIn(PacketContext context) {
+            InboundPacket pkt = context.inPacket();
+            Ethernet ethPkt = pkt.parsed();
+
+            if (ethPkt.getEtherType() == Ethernet.TYPE_IPV4) {
+                IPv4 ipv4Packet = (IPv4) ethPkt.getPayload();
+                Ip4Address srcIp = Ip4Address.valueOf(ipv4Packet.getSourceAddress());
+                Ip4Address dstIp = Ip4Address.valueOf(ipv4Packet.getDestinationAddress());
+
+                Optional<ResolvedRoute> route = routeService.longestPrefixLookup(srcIp);
+                if (!route.isPresent()) {
+                    log.warn("No Route srcIp!" + srcIp);
+                    return false;
+                }
+
+                hostService.requestMac(dstIp);
+                Host dstHost = getHost(dstIp);
+                if (dstHost == null) {
+                    log.warn("Dst host not found! Flood!");
+                    flood(context);
+                    context.block();
+                    return false;
+                }
+
+                MacAddress dstMac = dstHost.mac();
+                ConnectPoint egress = dstHost.location();
+                ConnectPoint ingress = pkt.receivedFrom();
+
+                TrafficSelector.Builder selector = DefaultTrafficSelector.builder();
+                selector.matchEthType(Ethernet.TYPE_IPV4)
+                        .matchIPDst(IpPrefix.valueOf(dstIp, 32))
+                        .matchEthDst(frrMac);
+
+                TrafficTreatment.Builder treatment = DefaultTrafficTreatment.builder();
+                treatment.setEthDst(dstMac) // get from hostService
+                        .setEthSrc(gatewayMac);
+
+                installIntent(ingress, egress, selector.build(), treatment.build(), 24);
+            } else if (ethPkt.getEtherType() == Ethernet.TYPE_IPV6) {
+                IPv6 ipv6Packet = (IPv6) ethPkt.getPayload();
+                Ip6Address srcIp = Ip6Address.valueOf(ipv6Packet.getSourceAddress());
+                Ip6Address dstIp = Ip6Address.valueOf(ipv6Packet.getDestinationAddress());
+
+                Optional<ResolvedRoute> route = routeService.longestPrefixLookup(srcIp);
+                if (!route.isPresent()) {
+                    log.warn("No Route srcIp!" + srcIp);
+                    context.block();
+                    return false;
+                }
+
+                hostService.requestMac(dstIp);
+                Host dstHost = getHost(dstIp);
+                if (dstHost == null) {
+                    log.warn("Dst host not found! Flood!");
+                    flood(context);
+                    context.block();
+                    return false;
+                }
+
+                MacAddress dstMac = dstHost.mac();
+                ConnectPoint egress = dstHost.location();
+                ConnectPoint ingress = pkt.receivedFrom();
+
+                TrafficSelector.Builder selector = DefaultTrafficSelector.builder();
+                selector.matchEthType(Ethernet.TYPE_IPV6)
+                        .matchIPv6Dst(IpPrefix.valueOf(dstIp, 128));
+
+                TrafficTreatment.Builder treatment = DefaultTrafficTreatment.builder();
+                treatment.setEthDst(dstMac) // get from hostService
+                        .setEthSrc(frrMac);
+
+                installIntent(ingress, egress, selector.build(), treatment.build(), 24);
+            }
+
+            return true;
+
+        }
+
+        private boolean processExternalOut(PacketContext context) {
+            InboundPacket pkt = context.inPacket();
+            Ethernet ethPkt = pkt.parsed();
+
+            if (ethPkt.getEtherType() == Ethernet.TYPE_IPV4) {
+                IPv4 ipv4Packet = (IPv4) ethPkt.getPayload();
+                Ip4Address dstIp = Ip4Address.valueOf(ipv4Packet.getDestinationAddress());
+
+                ConnectPoint ingress = pkt.receivedFrom();
+
+                Optional<ResolvedRoute> route = routeService.longestPrefixLookup(dstIp);
+                if (!route.isPresent()) {
+                    log.warn("No Route dstIp!" + dstIp);
+                    return false;
+                }
+
+                IpAddress nextHopIp = route.get().nextHop();
+                MacAddress nextHopMac = getHost(nextHopIp).mac();
+                Interface intf = interfaceService.getMatchingInterface(nextHopIp);
+                ConnectPoint egress = intf.connectPoint();
+                TrafficSelector.Builder selector = DefaultTrafficSelector.builder();
+                selector.matchEthType(Ethernet.TYPE_IPV4)
+                        .matchIPDst(IpPrefix.valueOf(dstIp, 32));
+
+                TrafficTreatment.Builder treatment = DefaultTrafficTreatment.builder();
+                treatment.setEthDst(nextHopMac) // get from hostService
+                        .setEthSrc(gatewayMac);
+
+                installIntent(ingress, egress, selector.build(), treatment.build(), 25);
+            } else if (ethPkt.getEtherType() == Ethernet.TYPE_IPV6) {
+                IPv6 ipv6Packet = (IPv6) ethPkt.getPayload();
+                Ip6Address dstIp = Ip6Address.valueOf(ipv6Packet.getDestinationAddress());
+
+                ConnectPoint ingress = pkt.receivedFrom();
+
+                Optional<ResolvedRoute> route = routeService.longestPrefixLookup(dstIp);
+                if (!route.isPresent()) {
+                    log.warn("No Route dstIp!" + dstIp);
+                    return false;
+                }
+
+                IpAddress nextHopIp = route.get().nextHop();
+                MacAddress nextHopMac = getHost(nextHopIp).mac();
+                Interface intf = interfaceService.getMatchingInterface(nextHopIp);
+                ConnectPoint egress = intf.connectPoint();
+                TrafficSelector.Builder selector = DefaultTrafficSelector.builder();
+                selector.matchEthType(Ethernet.TYPE_IPV6)
+                        .matchIPv6Dst(IpPrefix.valueOf(dstIp, 128));
+
+                TrafficTreatment.Builder treatment = DefaultTrafficTreatment.builder();
+                treatment.setEthDst(nextHopMac) // get from hostService
+                        .setEthSrc(gatewayMac);
+
+                installIntent(ingress, egress, selector.build(), treatment.build(), 25);
+            }
+
+            return true;
+        }
+
+        private void processIntraDomain(PacketContext context) {
+            InboundPacket pkt = context.inPacket();
+            Ethernet ethPkt = pkt.parsed();
+            DeviceId recDevId = pkt.receivedFrom().deviceId();
+            PortNumber inPort = pkt.receivedFrom().port();
+            MacAddress srcMac = ethPkt.getSourceMAC();
+            MacAddress dstMac = ethPkt.getDestinationMAC();
+
+            log.info("recDevId = {}, srcMac = {}, dstMac = {}, inPort = {}", recDevId, srcMac, dstMac, inPort);
+
+            // rec packet-in from new device, create new table for it
+            if (bridgeTable.get(recDevId) == null) {
+                bridgeTable.put(recDevId, new HashMap<>());
+            }
+
+            if (bridgeTable.get(recDevId).get(srcMac) == null) {
+                bridgeTable.get(recDevId).put(srcMac, inPort);
+                log.info("Add an entry to the port table of `{}`. MAC address: `{}` => Port:`{}`",
+                        recDevId, srcMac, inPort);
+            }
+
+            if (bridgeTable.get(recDevId).get(dstMac) == null) {
+                flood(context);
+            } else if (bridgeTable.get(recDevId).get(dstMac) != null) {
+                ConnectPoint ingressPoint = new ConnectPoint(recDevId, inPort);
+                ConnectPoint egressPoint = new ConnectPoint(recDevId,
+                        bridgeTable.get(recDevId).get(dstMac));
+                TrafficSelector selector = DefaultTrafficSelector.builder()
+                        .matchEthDst(dstMac).matchEthSrc(srcMac).build();
+                installIntent(ingressPoint, egressPoint, selector, null, 20);
+                log.info("MAC address `{}` is matched on `{}`. Install a flow rule.", dstMac,
+                        recDevId);
+            }
+        }
     }
 
     // ===== Implement Transit Processor using RouteService =====
@@ -394,13 +512,16 @@ public class AppComponent {
         public void event(RouteEvent event) {
             switch (event.type()) {
                 case ROUTE_ADDED:
-                    System.out.println("Route added: " + event.subject());
+                    // log.info("Route added: " + event.subject());
+                    installTransitIntent();
                     break;
                 case ROUTE_UPDATED:
-                    System.out.println("Route updated: " + event.subject());
+                    // log.info("Route updated: " + event.subject());
+                    // withdrawMultiPointToSinglePointIntent();
+                    installTransitIntent();
                     break;
                 case ROUTE_REMOVED:
-                    System.out.println("Route removed: " + event.subject());
+                    // log.info("Route removed: " + event.subject());
                     break;
                 default:
                     break;
@@ -409,45 +530,254 @@ public class AppComponent {
 
         private void installTransitIntent() {
 
+            Collection<RouteTableId> routeTables = routeService.getRouteTables();
+            for (RouteTableId routeTable : routeTables) {
+                Collection<RouteInfo> routes = routeService.getRoutes(routeTable);
+                for (RouteInfo routeInfo : routes) {
+                    Optional<ResolvedRoute> route = routeInfo.bestRoute();
+                    if (route.isPresent()) {
+                        log.info("-----------------");
+                        ResolvedRoute bestRoute = route.get();
+
+                        log.info("Best Route Prefix: " + bestRoute.prefix());
+                        log.info("Next Hop: " + bestRoute.nextHop());
+
+                        Iterable<Interface> interfaces = interfaceService.getInterfaces();
+                        Set<FilteredConnectPoint> srcPoints = new HashSet<>();
+                        int numOdCP = 0;
+                        for (Interface intf : interfaces) {
+                            boolean addSrcPoint = true;
+                            try {
+                                for (InterfaceIpAddress ip : intf.ipAddressesList()) {
+                                    IpAddress ipAddress = ip.ipAddress();
+                                    IpPrefix subnetPrefix = ip.subnetAddress();
+                                    log.info("Interface IP Prefix: " + subnetPrefix.toString());
+
+                                    if (ipAddress.isIp4() && bestRoute.nextHop().isIp4()) {
+                                        if (subnetPrefix.contains(bestRoute.nextHop())) {
+                                            log.info(bestRoute.nextHop() + " is in " + subnetPrefix);
+                                            addSrcPoint = false;
+                                        } else {
+                                            log.info(bestRoute.nextHop() + " is not in " + subnetPrefix);
+                                        }
+                                    } else if (ipAddress.isIp6() && bestRoute.nextHop().isIp6()) {
+                                        if (subnetPrefix.contains(bestRoute.nextHop())) {
+                                            log.info(bestRoute.nextHop() + " is in " + subnetPrefix);
+                                            addSrcPoint = false;
+                                        } else {
+                                            log.info(bestRoute.nextHop() + " is not in " + subnetPrefix);
+                                        }
+                                    }
+                                }
+                                if (addSrcPoint) {
+                                    log.info("Add srcPoint: " + intf.connectPoint());
+                                    ConnectPoint ingressPoint = intf.connectPoint();
+                                    srcPoints.add(new FilteredConnectPoint(ingressPoint));
+                                    numOdCP++;
+                                }
+                            } catch (Exception e) {
+                                log.error("*****" + e.getMessage());
+                            }
+
+                            log.info("Number of ipAddresses: " + intf.ipAddressesList().size());
+
+                        }
+
+                        log.info("Number of srcPoints: " + srcPoints.size());
+                        log.info("numOdCP: " + numOdCP);
+                        Interface intf2 = interfaceService.getMatchingInterface(bestRoute.nextHop());
+                        ConnectPoint egressPoint = intf2.connectPoint();
+                        if (srcPoints.isEmpty() == false) {
+                            log.info("Install MultiIntent!");
+                            if (bestRoute.nextHop().isIp4()) {
+                                TrafficSelector selector = DefaultTrafficSelector.builder()
+                                        .matchEthType(Ethernet.TYPE_IPV4)
+                                        .matchIPDst(bestRoute.prefix())
+                                        .build();
+                                installMultiIntent(srcPoints, egressPoint, selector, null);
+                            } else if (bestRoute.nextHop().isIp6()) {
+                                TrafficSelector selector = DefaultTrafficSelector.builder()
+                                        .matchEthType(Ethernet.TYPE_IPV6)
+                                        .matchIPv6Dst(bestRoute.prefix())
+                                        .build();
+                                installMultiIntent(srcPoints, egressPoint, selector, null);
+                            }
+
+                        } else {
+                            log.info("No Install MultiIntent(empty srcPoints)");
+                        }
+                        log.info("-----------------");
+
+                    } else {
+                        log.info("No best route available.");
+                    }
+
+                }
+
+            }
         }
+
     }
 
     // ===== Tool Functions =====
     protected void installIntent(ConnectPoint ingressPoint, ConnectPoint egressPoint, TrafficSelector selector,
             TrafficTreatment treatment, int priority) {
-        PointToPointIntent.Builder intent = PointToPointIntent.builder()
+
+        Key intentKey = Key.of(
+                String.join(":",
+                        ingressPoint != null ? String.valueOf(ingressPoint.hashCode()) : "0",
+                        egressPoint != null ? String.valueOf(egressPoint.hashCode()) : "0",
+                        selector != null ? String.valueOf(selector.hashCode()) : "0",
+                        treatment != null ? String.valueOf(treatment.hashCode()) : "0"),
+                appId);
+        Intent existIntent = intentService.getIntent(intentKey);
+        if (existIntent == null) {
+            PointToPointIntent.Builder intent = PointToPointIntent.builder()
+                    .appId(appId)
+                    .priority(priority)
+                    .filteredIngressPoint(new FilteredConnectPoint(ingressPoint))
+                    .filteredEgressPoint(new FilteredConnectPoint(egressPoint))
+                    .key(intentKey)
+                    .selector(selector);
+
+            if (treatment != null)
+                intent.treatment(treatment);
+
+            intentService.submit(intent.build());
+            log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
+                    ingressPoint.deviceId(), ingressPoint.port(),
+                    egressPoint.deviceId(), egressPoint.port());
+        } else {
+            log.info("Intent `{}`, port `{}` => `{}`, port `{}` already exists.",
+                    ingressPoint.deviceId(), ingressPoint.port(),
+                    egressPoint.deviceId(), egressPoint.port());
+        }
+    }
+
+    protected void withdrawPointToPointIntent() {
+        for (Intent intent : intentService.getIntentsByAppId(appId)) {
+            if (intent instanceof PointToPointIntent) {
+                intentService.withdraw(intent);
+            }
+        }
+    }
+
+    protected void installMultiIntent(Set<FilteredConnectPoint> ingressPoints,
+            ConnectPoint egressPoint,
+            TrafficSelector selector,
+            TrafficTreatment.Builder treatment) {
+        Key intentKey = Key.of(
+                String.join(":",
+                        egressPoint != null ? String.valueOf(egressPoint.hashCode()) : "0",
+                        selector != null ? String.valueOf(selector.hashCode()) : "0",
+                        treatment != null ? String.valueOf(treatment.hashCode()) : "0"),
+                appId);
+
+        Intent existIntent = intentService.getIntent(intentKey);
+
+        if (existIntent != null) {
+            log.info("Intent `{}` => `{}` already exists.",
+                    ingressPoints,
+                    egressPoint);
+            return;
+        }
+
+        MultiPointToSinglePointIntent.Builder intent = MultiPointToSinglePointIntent.builder()
                 .appId(appId)
-                .priority(priority)
-                .filteredIngressPoint(new FilteredConnectPoint(ingressPoint))
+                .priority(15)
+                .filteredIngressPoints(ingressPoints)
                 .filteredEgressPoint(new FilteredConnectPoint(egressPoint))
+                .key(intentKey)
                 .selector(selector);
 
         if (treatment != null)
-            intent.treatment(treatment);
+            intent.treatment(treatment.build());
 
         intentService.submit(intent.build());
+        log.info("MultiIntent `{}` => `{}` is submitted.",
+                ingressPoints,
+                egressPoint);
 
-        log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
-                ingressPoint.deviceId(), ingressPoint.port(),
-                egressPoint.deviceId(), egressPoint.port());
     }
 
-    protected void installMultiIntent(Set<FilteredConnectPoint> srcPoint,
-            ConnectPoint dstPoint,
-            TrafficTreatment.Builder treatment) {
+    protected void withdrawMultiPointToSinglePointIntent() {
+        for (Intent intent : intentService.getIntentsByAppId(appId)) {
+            if (intent instanceof MultiPointToSinglePointIntent) {
+                intentService.withdraw(intent);
+            }
+        }
+    }
 
-        MultiPointToSinglePointIntent.Builder p2pIntent = MultiPointToSinglePointIntent.builder()
-                .appId(appId)
-                .priority(30)
-                .treatment(treatment.build())
-                .filteredIngressPoints(srcPoint)
-                .filteredEgressPoint(new FilteredConnectPoint(dstPoint));
+    protected Host getHost(IpAddress ip) {
+        Host returnHost = null;
+        hostService.requestMac(ip);
+        for (Host host : hostService.getHostsByIp(ip)) {
+            returnHost = host;
+        }
+        return returnHost;
+    }
 
-        intentService.submit(p2pIntent.build());
-        log.info("Intent `{}` => `{}` is submitted.",
-                srcPoint,
-                dstPoint);
+    protected void floodNdp(Ip6Address targetIp) {
+        NeighborSolicitation ns = new NeighborSolicitation()
+                .setTargetAddress(targetIp.toOctets())
+                .addOption(NeighborDiscoveryOptions.TYPE_SOURCE_LL_ADDRESS, gatewayMac.toBytes());
 
+        Ethernet ethPkt = new Ethernet();
+        ethPkt.setEtherType(Ethernet.TYPE_IPV6);
+        ethPkt.setDestinationMACAddress(MacAddress.IPV6_MULTICAST);
+        ethPkt.setSourceMACAddress(gatewayMac);
+        ethPkt.setPayload(new IPv6()
+                .setDestinationAddress(Ip6Address.valueOf("ff02::1").toOctets())
+                .setSourceAddress(gatewayIp6.toOctets())
+                .setNextHeader(IPv6.PROTOCOL_ICMP6)
+                .setHopLimit((byte) 255)
+                .setPayload(new ICMP6()
+                        .setIcmpType(ICMP6.NEIGHBOR_SOLICITATION)
+                        .setIcmpCode((byte) 0)
+                        .setPayload(ns)));
+        ByteBuffer bpacket = ByteBuffer.wrap(ethPkt.serialize());
+        List<ConnectPoint> edgePoints = Lists.newArrayList(edgePortService.getEdgePoints());
+        for (ConnectPoint point : edgePoints) {
+            TrafficTreatment treatment = DefaultTrafficTreatment.builder()
+                    .setOutput(point.port())
+                    .setEthSrc(frrMac)
+                    .build();
+            OutboundPacket outpacket = new DefaultOutboundPacket(point.deviceId(),
+                    treatment,
+                    bpacket);
+            packetService.emit(outpacket);
+        }
+    }
+
+    protected void floodArp(Ip4Address targetIp) {
+        ARP arpRequest = new ARP();
+        arpRequest.setHardwareType(ARP.HW_TYPE_ETHERNET)
+                .setProtocolType(ARP.PROTO_TYPE_IP)
+                .setHardwareAddressLength((byte) Ethernet.DATALAYER_ADDRESS_LENGTH)
+                .setProtocolAddressLength((byte) 4)
+                .setOpCode(ARP.OP_REQUEST)
+                .setSenderHardwareAddress(gatewayMac.toBytes())
+                .setSenderProtocolAddress(gatewayIp4.toInt())
+                .setTargetHardwareAddress(MacAddress.BROADCAST.toBytes())
+                .setTargetProtocolAddress(targetIp.toInt());
+
+        Ethernet ethPkt = new Ethernet();
+        ethPkt.setEtherType(Ethernet.TYPE_ARP)
+                .setSourceMACAddress(gatewayMac)
+                .setDestinationMACAddress(MacAddress.BROADCAST)
+                .setPayload(arpRequest);
+        ByteBuffer bpacket = ByteBuffer.wrap(ethPkt.serialize());
+        List<ConnectPoint> edgePoints = Lists.newArrayList(edgePortService.getEdgePoints());
+        for (ConnectPoint point : edgePoints) {
+            TrafficTreatment treatment = DefaultTrafficTreatment.builder()
+                    .setOutput(point.port())
+                    .setEthSrc(frrMac)
+                    .build();
+            OutboundPacket outpacket = new DefaultOutboundPacket(point.deviceId(),
+                    treatment,
+                    bpacket);
+            packetService.emit(outpacket);
+        }
     }
 
 }

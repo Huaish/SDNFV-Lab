@@ -2,7 +2,23 @@
 .PHONY: all clean container ovs link ip-link onos-cli
 
 # Default target
-all: container ovs link
+# all: container ovs link
+
+deploy: container ovs link
+	sleep 3
+
+	mvn clean install -f ./vrouter/pom.xml -DskipTests
+	mvn clean install -f ./ProxyArp/pom.xml -DskipTests
+
+	sleep 5
+
+	onos-netcfg localhost ./cfg.json
+	
+	sleep 1
+
+	onos-app localhost install! ./ProxyArp/target/ProxyArp-1.0-SNAPSHOT.oar
+	onos-app localhost install! ./vrouter/target/vrouter-1.0-SNAPSHOT.oar
+
 
 # Build containers
 container:
@@ -37,6 +53,11 @@ link:
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip link set vetha-host1 up
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip addr add 172.16.55.2/24 dev vetha-host1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip -6 addr add 2a0b:4e07:c4:55::2/64 dev vetha-host1
+	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip route add default via 172.16.55.1 dev vetha-host1
+	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip -6 route add default via 2a0b:4e07:c4:55::1 dev vetha-host1
+	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip addr add 192.168.63.4/24 dev vetha-host1
+	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip -6 addr add fd63::4/64 dev vetha-host1
+# sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' h1) -n ip addr add 192.168.100.4/24 dev vetha-host1
 	
 	@echo "Setting up links...( OVS1 <-> OVS2 )"
 	sudo ip link add vethb-ovs1 type veth peer name vethb-ovs2
@@ -55,6 +76,7 @@ link:
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip addr add 192.168.70.55/24 dev vethc-r1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip addr add 172.16.55.69/24 dev vethc-r1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip addr add 192.168.100.3/24 dev vethc-r1
+	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip addr add 192.168.64.1/24 dev vethc-r1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip -6 addr add fd63::1/64 dev vethc-r1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip -6 addr add fd70::55/64 dev vethc-r1
 	sudo nsenter -t $(shell docker inspect -f '{{.State.Pid}}' R1) -n ip -6 addr add 2a0b:4e07:c4:55::69/64 dev vethc-r1
@@ -80,6 +102,11 @@ link:
 	sudo ovs-vsctl add-port OVS2 TO_TA_VXLAN -- set interface TO_TA_VXLAN type=vxlan options:remote_ip=192.168.60.55
 	sudo ovs-vsctl set int TO_TA_VXLAN options:mtu_request=1370
 	sudo ip l set mtu 1370 vxlan_sys_4789
+
+# @echo "Setting up links...( OVS2 <-> OVS4 )"
+# sudo ovs-vsctl add-port OVS2 TO_PEER_VXLAN -- set interface TO_PEER_VXLAN type=vxlan options:remote_ip=192.168.61.56
+# sudo ovs-vsctl set int TO_PEER_VXLAN options:mtu_request=1370
+# sudo ip l set mtu 1370 vxlan_sys_4789
 
 build:
 	mvn clean install -f ./vrouter/pom.xml -DskipTests
@@ -114,6 +141,8 @@ clean:
 	sudo ip link delete vethc-ovs1 || true
 	sudo ip link delete vethd-ovs1 || true
 	sudo ip link delete vethe-ovs1 || true
+	sudo ip link delete vethf-ovs2 || true
+	sudo ip link delete vethg-ovs2 || true
 
 	@echo "Removing OVS Bridge..."
 	sudo ovs-vsctl del-br OVS1 || true

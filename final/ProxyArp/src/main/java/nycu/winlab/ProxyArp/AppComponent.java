@@ -15,6 +15,10 @@
  */
 package nycu.winlab.ProxyArp;
 
+import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_ADDED;
+import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_UPDATED;
+import static org.onosproject.net.config.basics.SubjectFactories.APP_SUBJECT_FACTORY;
+
 import org.onosproject.cfg.ComponentConfigService;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
@@ -49,7 +53,10 @@ import org.onlab.packet.Ip4Address;
 import org.onlab.packet.Ip4Prefix;
 import org.onlab.packet.Ip6Address;
 import org.onosproject.net.ConnectPoint;
-
+import org.onosproject.net.config.ConfigFactory;
+import org.onosproject.net.config.NetworkConfigEvent;
+import org.onosproject.net.config.NetworkConfigListener;
+import org.onosproject.net.config.NetworkConfigRegistry;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficTreatment;
@@ -66,12 +73,20 @@ import org.onosproject.net.edge.EdgePortService;
 @Component(immediate = true)
 public class AppComponent {
 
-    private final Logger log = LoggerFactory.getLogger(getClass());
+    private final Logger log = LoggerFactory.getLogger("ProxyArp");
+    private final InfoConfigListener cfgListener = new InfoConfigListener();
+    private final ConfigFactory<ApplicationId, InfoConfig> factory = new ConfigFactory<ApplicationId, InfoConfig>(
+            APP_SUBJECT_FACTORY, InfoConfig.class, "virtual-arps") {
+        @Override
+        public InfoConfig createConfig() {
+            return new InfoConfig();
+        }
+    };
 
     /** Some configurable property. */
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
-    protected ComponentConfigService cfgService;
+    protected NetworkConfigRegistry cfgService;
 
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected CoreService coreService;
@@ -83,7 +98,12 @@ public class AppComponent {
     protected EdgePortService edgePortService;
 
     private ProxyArpProcessor processor = new ProxyArpProcessor();
+
     private ApplicationId appId;
+    InfoConfig config = null;
+    private Ip4Address vip4;
+    private Ip6Address vip6;
+    private MacAddress vmac;
     private Map<Ip4Address, MacAddress> arpTable = new HashMap<>();
     private Map<Ip6Address, MacAddress> ndpTable = new HashMap<>();
     private Map<MacAddress, ConnectPoint> cpTable = new HashMap<>();
@@ -91,9 +111,12 @@ public class AppComponent {
 
     @Activate
     protected void activate() {
-
         // register your app
         appId = coreService.registerApplication("nycu.winlab.ProxyArp");
+
+        // Register the configuration factory
+        cfgService.addListener(cfgListener);
+        cfgService.registerConfigFactory(factory);
 
         // add a packet processor to packetService
         packetService.addProcessor(processor, PacketProcessor.director(2));
@@ -238,6 +261,25 @@ public class AppComponent {
                 }
 
                 // Get source and destination IP/MAC addresses
+            }
+        }
+    }
+
+    private class InfoConfigListener implements NetworkConfigListener {
+        @Override
+        public void event(NetworkConfigEvent event) {
+            if ((event.type() == NetworkConfigEvent.Type.CONFIG_ADDED
+                    || event.type() == NetworkConfigEvent.Type.CONFIG_UPDATED)
+                    && event.configClass().equals(InfoConfig.class)) {
+                config = cfgService.getConfig(appId, InfoConfig.class);
+                if (config != null) {
+                    log.info("ProxyARP Config Loaded");
+                    vip4 = Ip4Address.valueOf(config.vip4());
+                    vip6 = Ip6Address.valueOf(config.vip6());
+                    vmac = MacAddress.valueOf(config.vmac());
+                    arpTable.put(vip4, vmac);
+                    ndpTable.put(vip6, vmac);
+                }
             }
         }
     }
